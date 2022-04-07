@@ -1,7 +1,7 @@
 'use strict';
 
 const uuid = require('uuid/v4');
-const { trimChars, trimCharsEnd, trimCharsStart } = require('lodash/fp');
+const { trimChars, trimCharsEnd, trimCharsStart, keys, sortBy, omit } = require('lodash/fp');
 
 // TODO: to use once https://github.com/strapi/strapi/pull/12534 is merged
 // const { joinBy } = require('@strapi/utils');
@@ -58,8 +58,41 @@ const exists = async (params = {}) => {
   return count > 0;
 };
 
+const getTree = async () => {
+  const joinTable = strapi.db.metadata.get('plugin::upload.folder').attributes.parent.joinTable;
+  const qb = strapi.db.queryBuilder('plugin::upload.folder');
+  const alias = qb.getAlias();
+  const folders = await qb
+    .select(['id', 'name', `${alias}.${joinTable.inverseJoinColumn.name} as parent`])
+    .join({
+      alias,
+      referencedTable: joinTable.name,
+      referencedColumn: joinTable.joinColumn.name,
+      rootColumn: joinTable.joinColumn.referencedColumn,
+      rootTable: qb.alias,
+    })
+    .execute({ mapResults: false });
+
+  const folderMap = folders.reduce((map, f) => {
+    f.children = [];
+    map[f.id] = f;
+    return map;
+  }, {});
+  folderMap.null = { children: [] };
+
+  for (const id of keys(omit('null', folderMap))) {
+    const parentId = folderMap[id].parent;
+    folderMap[parentId].children.push(folderMap[id]);
+    folderMap[parentId].children = sortBy('name', folderMap[parentId].children);
+    delete folderMap[id].parent;
+  }
+
+  return folderMap.null.children;
+};
+
 module.exports = {
   exists,
   deleteByIds,
   setLocationAndUID,
+  getTree,
 };
